@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from ..config import build_stages, teacher_domains
 from ..data.dataset import make_loader
 from ..models.segmenter import Segmenter
-from .common import amp_ctx, build_optimizer, build_scheduler, evaluate, write_json
+from .common import Meter, amp_ctx, build_optimizer, build_scheduler, evaluate, format_epoch, write_json
 
 
 def teacher_path(cfg, name):
@@ -47,7 +47,7 @@ def _train_one(cfg, name, splits, device):
     print(f"[teacher {name}] training on {doms}: {len(train_rows)} images, {tc['epochs']} epochs")
     for ep in range(tc["epochs"]):
         model.train()
-        t0, tot, n = time.time(), 0.0, 0
+        t0, meter = time.time(), Meter(ign)
         for b in loader:
             x, y = b["image"].to(device, non_blocking=True), b["mask"].to(device, non_blocking=True)
             if (y != ign).sum() == 0:
@@ -63,15 +63,22 @@ def _train_one(cfg, name, splits, device):
             scaler.step(opt)
             scaler.update()
             sched.step()
-            tot, n = tot + loss.item(), n + 1
-        rec = {"epoch": ep + 1, "loss": tot / max(n, 1), "sec": round(time.time() - t0, 1)}
+            meter.update(loss.detach(), logits.detach(), y)
+        rec = {"epoch": ep + 1, "sec": round(time.time() - t0, 1), "lr": opt.param_groups[0]["lr"], **meter.result()}
+        rec.pop("teacher_agreement")
         last = ep + 1 == tc["epochs"]
+        m, extra = None, {}
         if val_loader and ((ep + 1) % tc.get("eval_every", 1) == 0 or last):
-            m = evaluate(model, val_loader, cfg, device)
-            rec["val_miou"] = m["miou"]
+            m = evaluate(model, val_loader, cfg, device, cfg["eval"].get("max_batches_epoch"),
+                         boundary=cfg["metrics"].get("boundary", True))
+            rec.update({"val_loss": m["loss"], "val_acc": m["pixel_acc"], "val_miou": m["miou"],
+                        "val_mf1": m["mf1"], "val_biou": m.get("biou")})
             if m["miou"] > best:
                 best, best_state = m["miou"], {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        print(f"[teacher {name}] " + " ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in rec.items()))
+            extra["best val mIoU"] = f"{best:.2f}"
+        extra["lr / time"] = f"{rec['lr']:.2e} / {rec['sec']}s"
+        print(format_epoch(f"[teacher {name}]", ep + 1, tc["epochs"], rec, m, cfg["classes"], extra,
+                           cfg["metrics"].get("print_per_class", True)))
         log.append(rec)
     if best_state is not None:
         model.load_state_dict(best_state)

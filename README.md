@@ -96,13 +96,49 @@ script writes `ablation_table.md`.
   with `teachers.per_teacher.<name>.train_on`, or `checkpoint` to bring your
   own teacher.
 
+## Per-epoch report
+
+Every epoch, both for the teachers and for each distillation stage, prints:
+
+```
+[bdd100k] ep[3/10]: train loss 1.9510 acc 86.32 (teacher-agree 49.52)
+    val   loss 0.8228 acc 87.71 | mIoU 40.98 | mF1 45.00 | bIoU 3.78
+    loss terms: kd_current=1.22 kd_replay=0.22 bn_domain=0.26 bn_layer=0.21 class_proto=0.04
+    val mIoU per seen domain: cityscapes=43.83, bdd100k=40.98 | avg 42.40
+    forgetting so far: avg 2.37 | cityscapes=2.37
+    BWT so far: avg -1.43 | cityscapes=-1.43
+    router external score: bdd100k=0.052
+    buffer: 40 exemplars over 1 stage(s)
+    lr / time: 2.23e-04 / 95s
+    class            IoU      F1    bIoU
+    road           86.75   92.90    7.54
+    ...
+```
+
+* **Train accuracy** is measured against ground truth where it exists. It is a
+  measurement only: the student does not learn from labels unless
+  `supervised_ce` is on.
+* **Teacher-agree** is the fraction of pixels where the student matches the
+  teacher's prediction.
+* **Validation** uses the held-out *val* split, never the test split. The
+  headline line and the per-class table cover the current stage's domains.
+* **Per seen domain, forgetting and BWT** cover every domain learned so far.
+  Forgetting is the best earlier val mIoU minus the current one. BWT is the
+  current val mIoU minus the value at the end of the stage where the domain was
+  learned.
+* **Boundary IoU** follows Cheng et al. (2021), with a band width of
+  `metrics.boundary_ratio` × the image diagonal.
+* `eval_every`, `metrics.print_per_class` and `eval.max_batches_epoch` control
+  how often validation runs and how much it costs.
+
 ## Outputs (`output_dir`)
 
 | File | Contents |
 |---|---|
 | `eda/` | Per-domain/split stats (sizes, class pixel share and presence, ignore %, RGB moments, raw label values), example GT overlays, cross-domain class and brightness plots |
 | `results.md`, `results.json`, `miou_matrix.csv` | R[stage, domain] mIoU, final average, forgetting, BWT, teacher upper bounds |
-| `miou_matrix.png`, `forgetting_curve.png`, `loss_curves.png` | Plots |
+| `miou_matrix.png`, `forgetting_curve.png`, `loss_curves.png`, `training_curves.png` | Plots. `training_curves.png` shows train/val loss and accuracy, val mIoU/bIoU/F1, seen-average mIoU, forgetting and BWT per epoch |
+| `history.csv`, `per_class_val_history.csv` | Every per-epoch metric, plus per-class IoU/F1/bIoU per epoch |
 | `predictions_<domain>.png` | Image, ground truth and student prediction |
 | `diagnostics.json` | Router external score per domain, prototype observations and rejected outliers, buffer contents |
 | `last.pt`, `student_stage_XX.pt` | Resumable state (student, old student, banks, buffer) |

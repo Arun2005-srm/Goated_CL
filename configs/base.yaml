@@ -65,7 +65,7 @@ teachers:
   warmup_steps: 200
   amp: true
   grad_clip: 5.0
-  eval_every: 5
+  eval_every: 1
   class_weights: null
 
 protocol:
@@ -82,9 +82,15 @@ distill:
   amp: true
   grad_clip: 5.0
   temperature: 2.0
-  eval_every_epoch: false
+  eval_every: 1          # validate every N epochs (always on the last epoch of a stage)
 
-eval: {batch_size: 4, amp: true, max_batches: null}
+eval: {batch_size: 4, amp: true, max_batches: null, max_batches_epoch: null}  # *_epoch caps per-epoch val cost
+
+metrics:
+  boundary: true             # Boundary IoU (Cheng et al. 2021) per class, every validation
+  boundary_ratio: 0.02       # boundary band width = ratio * image diagonal
+  print_per_class: true      # per-class IoU / F1 / bIoU table every epoch
+  epoch_eval_domains: seen   # seen = domains learned so far (for forgetting) | all
 
 # ---------------------------------------------------------------------------------------
 # Every component is an independent on/off switch (see METHOD.md). Full GOATED model:

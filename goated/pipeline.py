@@ -8,8 +8,8 @@ from .data.dataset import make_loader, maybe_cache
 from .engine.common import get_device, seed_all
 
 
-def eval_loaders(cfg, splits):
-    split = cfg["data"].get("eval_split", "test")
+def eval_loaders(cfg, splits, split=None):
+    split = split or cfg["data"].get("eval_split", "test")
     doms = cfg["protocol"].get("eval_on") or list(cfg["domains"])
     out = {}
     for d in doms:
@@ -51,7 +51,7 @@ def run(cfg, only=None, resume=None):
         return
     from .engine.distill import GoatedDistiller
     seed_all(cfg["seed"])
-    dist = GoatedDistiller(cfg, splits, device, loaders)
+    dist = GoatedDistiller(cfg, splits, device, loaders, eval_loaders(cfg, splits, "val"))
     if resume:
         dist.resume(resume)
     return dist.run()

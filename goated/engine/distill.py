@@ -14,14 +14,17 @@ from ..models.segmenter import Segmenter, count_params
 from ..components.losses import multi_source_kd, pseudo_label_ce, supervised_ce
 from ..components.prototypes import BNStatRecorder, DomainPrototypeBank, TeacherRouter, layer_distance
 from ..components.memory import ExemplarBuffer, ClassGaussianBank, StochasticRestore, vog_scores, entropy_scores
-from .common import amp_ctx, build_optimizer, build_scheduler, evaluate, write_json
+from .common import (Meter, amp_ctx, build_optimizer, build_scheduler, combine_metrics, evaluate,
+                     format_epoch, write_json)
 from .teachers import load_teacher
 from .reports import write_reports
 
 
 class GoatedDistiller:
-    def __init__(self, cfg, splits, device, eval_loaders):
+    def __init__(self, cfg, splits, device, eval_loaders, val_loaders=None):
         self.cfg, self.splits, self.device, self.eval_loaders = cfg, splits, device, eval_loaders
+        self.val_loaders = val_loaders or {}
+        self.best_val, self.learned_val, self.per_class_rows = {}, {}, []
         self.comp, self.hp = cfg["components"], cfg["hparams"]
         self.C, self.ign = len(cfg["classes"]), cfg["ignore_index"]
         self.T = cfg["distill"]["temperature"]
@@ -129,6 +132,7 @@ class GoatedDistiller:
         step = 0
         for ep in range(stage["epochs"]):
             t0, agg = time.time(), {}
+            meter = Meter(self.ign)
             last_epoch = ep + 1 == stage["epochs"]
             for b in loader:
                 x = b["image"].to(dev, non_blocking=True)
@@ -282,17 +286,25 @@ class GoatedDistiller:
                 for k, v in losses.items():
                     agg[k] = agg.get(k, 0.0) + float(v)
                 agg["total"] = agg.get("total", 0.0) + float(loss)
+                meter.update(loss, s_cur.detach(), y if (y != self.ign).any() else None, t_p1)
                 step += 1
             n = max(len(loader), 1)
+            last = ep + 1 == stage["epochs"]
+            do_eval = last or (ep + 1) % max(1, dc.get("eval_every", 1)) == 0
             rec = {"stage": stage["name"], "epoch": ep + 1, "sec": round(time.time() - t0, 1),
-                   **{k: v / n for k, v in agg.items()}}
+                   "lr": opt.param_groups[0]["lr"], **meter.result(), **{f"loss_{k}": v / n for k, v in agg.items()}}
+            val, extra = None, {}
+            if do_eval:
+                val, extra = self._epoch_eval(si, stage, rec)
+            extra = {"loss terms": " ".join(f"{k}={v / n:.4f}" for k, v in agg.items() if k != "total"), **extra}
+            if route_log:
+                extra["router external score"] = ", ".join(f"{d}={sum(v) / len(v):.3f}" for d, v in route_log.items())
+            if self.buffer is not None:
+                extra["buffer"] = f"{len(self.buffer)} exemplars over {len(self.buffer.buckets)} stage(s)"
+            extra["lr / time"] = f"{rec['lr']:.2e} / {rec['sec']}s"
             self.history.append(rec)
-            print(f"[stage {stage['name']}] ep {ep + 1}/{stage['epochs']} " +
-                  " ".join(f"{k}={v:.4f}" for k, v in rec.items() if isinstance(v, float)))
-            if dc.get("eval_every_epoch"):
-                m = {d: evaluate(self.student, ld, cfg, dev, cfg["eval"].get("max_batches"))["miou"]
-                     for d, ld in self.eval_loaders.items()}
-                print(f"[stage {stage['name']}] quick eval mIoU: " + ", ".join(f"{d}={v:.2f}" for d, v in m.items()))
+            print(format_epoch(f"[{stage['name']}]", ep + 1, stage["epochs"], rec, val, cfg["classes"], extra,
+                               cfg["metrics"].get("print_per_class", True)))
 
         for r in (s_rec, o_rec, router):
             if r is not None:
@@ -308,6 +320,64 @@ class GoatedDistiller:
             torch.cuda.empty_cache()
         return diag
 
+    # ------------------------------------------------------------------ per-epoch validation
+    def _seen_domains(self, si):
+        seen = []
+        for s in self.stages[: si + 1]:
+            for d in [*s["distill_on"], *teacher_domains(self.cfg, s["teacher"])]:
+                if d not in seen:
+                    seen.append(d)
+        return seen
+
+    def _epoch_eval(self, si, stage, rec):
+        """Validate on current-stage domains (headline + per-class table) and on every seen domain
+        (per-domain mIoU, forgetting and BWT so far). Uses the held-out *val* split, never test."""
+        cfg = self.cfg
+        mode = cfg["metrics"].get("epoch_eval_domains", "seen")
+        pool = self._seen_domains(si) if mode == "seen" else list(self.val_loaders)
+        doms = [d for d in pool if d in self.val_loaders]
+        if not doms:
+            return None, {"val": "no labelled val split"}
+        per = {d: evaluate(self.student, self.val_loaders[d], cfg, self.device, cfg["eval"].get("max_batches_epoch"),
+                           boundary=cfg["metrics"].get("boundary", True), return_counts=True) for d in doms}
+        cur = [d for d in stage["distill_on"] if d in per] or doms
+        val = combine_metrics([per[d] for d in cur], cfg["classes"])
+        first = {}
+        for i, s in enumerate(self.stages[: si + 1]):
+            for d in [*s["distill_on"], *teacher_domains(cfg, s["teacher"])]:
+                first.setdefault(d, i)
+        forg, bwt = {}, {}
+        for d, m in per.items():
+            if first.get(d, si) < si:
+                forg[d] = max(self.best_val.get(d, m["miou"]), m["miou"]) - m["miou"]
+                if d in self.learned_val:
+                    bwt[d] = m["miou"] - self.learned_val[d]
+        for d, m in per.items():
+            self.best_val[d] = max(self.best_val.get(d, m["miou"]), m["miou"])
+        avg = lambda xs: sum(xs) / len(xs) if xs else float("nan")
+        rec.update({"val_loss": val["loss"], "val_acc": val["pixel_acc"], "val_miou": val["miou"], "val_mf1": val["mf1"],
+                    "val_biou": val.get("biou"), "seen_avg_miou": avg([m["miou"] for m in per.values()]),
+                    "forgetting": avg(list(forg.values())), "bwt": avg(list(bwt.values())),
+                    **{f"val_miou_{d}": m["miou"] for d, m in per.items()}})
+        for c in cfg["classes"]:
+            self.per_class_rows.append({"stage": stage["name"], "epoch": rec["epoch"], "class": c,
+                                        "iou": val["per_class_iou"][c], "f1": val["per_class_f1"][c],
+                                        "biou": val.get("per_class_biou", {}).get(c)})
+        fmt = lambda v: "n/a" if v != v else f"{v:.2f}"
+        extra = {
+            "val mIoU per seen domain": ", ".join(f"{d}={m['miou']:.2f}" for d, m in per.items())
+                                        + f" | avg {fmt(rec['seen_avg_miou'])}",
+            "forgetting so far": (f"avg {fmt(rec['forgetting'])} | " + ", ".join(f"{d}={v:.2f}" for d, v in forg.items()))
+                                 if forg else "n/a (no earlier domain yet)",
+            "BWT so far": (f"avg {fmt(rec['bwt'])} | " + ", ".join(f"{d}={v:+.2f}" for d, v in bwt.items()))
+                          if bwt else "n/a",
+        }
+        if rec["epoch"] == stage["epochs"]:  # domains first learned in this stage: remember for BWT
+            for d, m in per.items():
+                if first.get(d) == si:
+                    self.learned_val[d] = m["miou"]
+        return val, extra
+
     # ------------------------------------------------------------------ full sequence
     def run(self):
         diags = []
@@ -319,8 +389,15 @@ class GoatedDistiller:
             row = {d: evaluate(self.student, ld, self.cfg, self.device) for d, ld in self.eval_loaders.items()}
             self.R.append({"stage": stage["name"], **{d: m["miou"] for d, m in row.items()}})
             write_json(self.out / f"eval_stage_{si + 1:02d}_{stage['name']}.json", row)
-            print(f"[eval after {stage['name']}] " + ", ".join(f"{d}={m['miou']:.2f}" for d, m in row.items()))
+            print(f"[test after {stage['name']}] mIoU " + ", ".join(f"{d}={m['miou']:.2f}" for d, m in row.items())
+                  + " | bIoU " + ", ".join(f"{d}={m.get('biou', float('nan')):.2f}" for d, m in row.items()))
             torch.save(self.student.state_dict(), self.out / f"student_stage_{si + 1:02d}.pt")
             self.save(si)
         write_json(self.out / "diagnostics.json", diags)
+        if self.per_class_rows:
+            import csv
+            with (self.out / "per_class_val_history.csv").open("w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=list(self.per_class_rows[0]))
+                w.writeheader()
+                w.writerows(self.per_class_rows)
         return write_reports(self.cfg, self.R, self.history, self.stages, self.student, self.eval_loaders, self.device)

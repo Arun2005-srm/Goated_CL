@@ -57,13 +57,26 @@ def _plots(out, R, domains, history):
     ax.set_xticks(range(1, len(names) + 1)); ax.set_xticklabels(names)
     ax.set_ylabel("mIoU"); ax.legend(); ax.set_title("Per-domain mIoU across stages (forgetting curve)")
     fig.tight_layout(); fig.savefig(out / "forgetting_curve.png", dpi=120); plt.close(fig)
-    keys = sorted({k for h in history for k in h if k not in ("stage", "epoch", "sec")})
+    keys = sorted({k for h in history for k in h if k.startswith("loss_")})
     if keys:
         fig, ax = plt.subplots(figsize=(8, 4))
         for k in keys:
-            ax.plot([h.get(k, np.nan) for h in history], marker=".", label=k)
+            ax.plot([h.get(k, np.nan) for h in history], marker=".", label=k[5:])
         ax.set_xlabel("epoch (all stages)"); ax.set_ylabel("loss"); ax.set_yscale("log"); ax.legend(fontsize=7)
         fig.tight_layout(); fig.savefig(out / "loss_curves.png", dpi=120); plt.close(fig)
+    g = lambda k: [np.nan if h.get(k) is None else h[k] for h in history]
+    panels = [("loss", ["train_loss", "val_loss"]), ("accuracy %", ["train_acc", "val_acc", "teacher_agreement"]),
+              ("val (current domains) %", ["val_miou", "val_biou", "val_mf1"]),
+              ("continual %", ["seen_avg_miou", "forgetting", "bwt"])]
+    fig, axes = plt.subplots(1, 4, figsize=(18, 3.8))
+    bounds = [i + 0.5 for i in range(len(history) - 1) if history[i]["stage"] != history[i + 1]["stage"]]
+    for ax, (title, ks) in zip(axes, panels):
+        for k in ks:
+            ax.plot(range(1, len(history) + 1), g(k), marker=".", label=k)
+        for b in bounds:
+            ax.axvline(b + 1, color="grey", ls=":", lw=1)
+        ax.set_title(title); ax.set_xlabel("epoch (all stages; dotted = new stage)"); ax.legend(fontsize=7)
+    fig.tight_layout(); fig.savefig(out / "training_curves.png", dpi=120); plt.close(fig)
 
 
 @torch.no_grad()
