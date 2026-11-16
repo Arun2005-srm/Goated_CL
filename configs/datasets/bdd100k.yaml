@@ -1,0 +1,19 @@
+# Berkeley DeepDrive (BDD100K) semantic segmentation (10k subset). Expected layout under root
+# (same as your existing `bekerly` folder):
+#   10k/{train,val}/*.jpg
+#   labels/{train,val}/<stem>_train_id.png     (integer train IDs 0..18, 255 = ignore)
+# Use labels/, not color_labels/. If your masks are named <stem>.png, change the templates.
+# BDD test labels are not public: official VAL is our TEST; 10% of train is held out as VAL.
+root: ""                     # e.g. D:/city_datasets/cl_datasets/bekerly
+group_by: image              # BDD frames are independent -> per-image hold-out
+label_map: {}                # already Cityscapes-19 train IDs
+splits:
+  train:
+    images: 10k/train/*.jpg
+    image_base: 10k/train
+    masks: labels/train/{stem}_train_id.png
+  test:
+    images: 10k/val/*.jpg
+    image_base: 10k/val
+    masks: labels/val/{stem}_train_id.png
+holdout: {source: train, target: val, ratio: 0.1, by_group: false}

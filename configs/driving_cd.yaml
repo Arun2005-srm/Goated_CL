@@ -1,0 +1,26 @@
+# CDTDD-style continual distillation on driving data (fixed distillation set, varying teachers).
+# Cityscapes is the internal domain every teacher knows; each teacher also knows one extra
+# domain. The student always distils on the same unlabelled pool {cityscapes, bdd100k, idd},
+# so for each teacher one domain is external (unknown to it), which is where unseen-knowledge
+# transfer and forgetting happen.
+#
+#   stage 1: T_cs+bdd  -> external = idd
+#   stage 2: T_cs+idd  -> external = bdd100k
+#
+#   python train.py --config configs/driving_cd.yaml
+extends: driving_dil.yaml
+output_dir: runs/driving_cd/goated_full
+
+teachers:
+  dir: runs/driving_cd/teachers
+  shared_domains: [cityscapes]
+  per_teacher:
+    cs_bdd: {train_on: [cityscapes, bdd100k]}
+    cs_idd: {train_on: [cityscapes, idd]}
+
+protocol:
+  stages:
+    - {name: t_cs_bdd, teacher: cs_bdd, distill_on: [cityscapes, bdd100k, idd]}
+    - {name: t_cs_idd, teacher: cs_idd, distill_on: [cityscapes, bdd100k, idd]}
+# `external` is derived automatically (distill domains the teacher was not trained on).
+# With auto_domain_routing on, it is ignored: the router finds external images itself.

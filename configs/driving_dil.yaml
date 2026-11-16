@@ -1,0 +1,18 @@
+# Domain-incremental continual distillation: Cityscapes -> BDD100K -> IDD.
+# Stage t: teacher_t (trained on domain t) is available, the student distils on domain t's
+# unlabelled train images, then teacher_t is gone. Evaluation: every domain after every stage.
+#
+#   python train.py --config configs/driving_dil.yaml
+#
+extends: base.yaml
+output_dir: runs/driving_dil/goated_full
+
+domains:
+  cityscapes: {include: datasets/cityscapes.yaml, root: ""}   # <- set your paths here
+  bdd100k:    {include: datasets/bdd100k.yaml,    root: ""}
+  idd:        {include: datasets/idd.yaml,        root: ""}
+
+domain_order: [cityscapes, bdd100k, idd]
+
+teachers:
+  dir: runs/driving_dil/teachers

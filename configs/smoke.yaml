@@ -1,0 +1,38 @@
+# Offline end-to-end check on synthetic data (tiny random-init models, ~1-2 min):
+#   python scripts/make_toy_dataset.py
+#   python train.py --config configs/smoke.yaml
+extends: base.yaml
+output_dir: runs/smoke/goated_full
+classes: [road, building, sky, car]
+colors: [[128,64,128], [70,70,70], [70,130,180], [0,0,142]]
+
+domains:
+  sunny: &toy
+    root: runs/toy_data/sunny
+    group_by: parent
+    label_map: {}
+    splits:
+      train: {images: "images/train/*/*.png", image_base: images/train, masks: "masks/train/{relative}"}
+      test:  {images: "images/test/*/*.png",  image_base: images/test,  masks: "masks/test/{relative}"}
+    holdout: {source: train, target: val, ratio: 0.25, by_group: true}
+  foggy: {<<: *toy, root: runs/toy_data/foggy}
+  night: {<<: *toy, root: runs/toy_data/night}
+domain_order: [sunny, foggy, night]
+
+loader: {batch_size: 4, num_workers: 0, pin_memory: false}
+transforms:
+  train: [{name: random_horizontal_flip, p: 0.5}, {name: normalize}]
+  distill: [{name: random_horizontal_flip, p: 0.5}, {name: normalize}]
+  eval: [{name: normalize}]
+eda: {enabled: true, max_images: 20, example_images: 2}
+models:
+  teacher: {encoder: tiny, tiny_width: 16, width: 32, aspp_rates: [2, 4]}
+  student: {encoder: tiny, tiny_width: 8, width: 16, aspp_rates: [2, 4]}
+teachers: {dir: runs/smoke/teachers, epochs: 6, lr: 0.05, warmup_steps: 0, eval_every: 3, batch_size: 4}
+distill: {epochs: 8, lr: 0.003, warmup_steps: 0}
+hparams:
+  buffer: {per_stage: 8, update_every: 2, replay_batch: 2}
+  prototypes: {layers: 6}
+  routing: {calib_batches: 4}
+  class_proto: {bank: {max_pixels: 256, min_count: 20}}
+reporting: {num_predictions: 2}

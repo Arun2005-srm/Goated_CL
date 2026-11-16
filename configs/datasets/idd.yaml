@@ -1,0 +1,33 @@
+# India Driving Dataset (IDD Segmentation, IDD_Segmentation.tar.gz). Expected layout under root:
+#   leftImg8bit/{train,val}/<seq>/<frame>_leftImg8bit.png
+#   gtFine/{train,val}/<seq>/<frame>_gtFine_labellevel3Ids.png
+# The *_labellevel3Ids.png masks are produced by the official public-code script
+# (preperation/createLabels.py --datadir <root> --id-type level3Id). Run it once first.
+# IDD test labels are not public: official VAL is our TEST; 10% of train sequences = VAL.
+#
+# level3Id -> Cityscapes-19 mapping (IDD has no 'train' class; 16 stays empty):
+#   0 road->road, 2 sidewalk->sidewalk, 3 non-drivable fallback->terrain, 4 person->person,
+#   5 rider->rider, 6 motorcycle->motorcycle, 7 bicycle->bicycle, 9 car->car, 10 truck->truck,
+#   11 bus->bus, 14 wall->wall, 15 fence->fence, 18 traffic sign->traffic_sign,
+#   19 traffic light->traffic_light, 20 pole->pole, 22 building->building,
+#   24 vegetation->vegetation, 25 sky->sky.
+# Ignored: 1 drivable fallback/parking, 8 autorickshaw, 12 vehicle fallback, 13 curb,
+#   16 guard rail, 17 billboard, 21 obs-str-bar-fallback, 23 bridge/tunnel.
+# Check `eda/idd/*/stats.json -> raw_values_mapped_to_ignore` after your first EDA run to
+# confirm your label files use these IDs. (Mapping autorickshaw->car is a common alternative.)
+root: ""                     # e.g. D:/datasets/IDD_Segmentation
+group_by: parent             # group = driving sequence (hold-out is sequence-disjoint)
+label_map: {0: 0, 2: 1, 22: 2, 14: 3, 15: 4, 20: 5, 19: 6, 18: 7, 24: 8, 3: 9, 25: 10,
+            4: 11, 5: 12, 9: 13, 10: 14, 11: 15, 6: 17, 7: 18}
+splits:
+  train:
+    images: leftImg8bit/train/*/*_leftImg8bit.png
+    image_base: leftImg8bit/train
+    strip_suffix: _leftImg8bit
+    masks: gtFine/train/{parent}/{stem}_gtFine_labellevel3Ids.png
+  test:
+    images: leftImg8bit/val/*/*_leftImg8bit.png
+    image_base: leftImg8bit/val
+    strip_suffix: _leftImg8bit
+    masks: gtFine/val/{parent}/{stem}_gtFine_labellevel3Ids.png
+holdout: {source: train, target: val, ratio: 0.1, by_group: true}

@@ -1,0 +1,21 @@
+# Cityscapes (fine annotations). Expected layout under root:
+#   leftImg8bit/{train,val}/<city>/<city>_xxx_yyy_leftImg8bit.png
+#   gtFine/{train,val}/<city>/<city>_xxx_yyy_gtFine_labelIds.png
+# Official test labels are withheld, so the official VAL set is used as our TEST split and a
+# city-disjoint 10% of train is held out as VAL (teacher model selection).
+root: ""                     # e.g. D:/datasets/cityscapes
+group_by: parent             # group = city (hold-out is city-disjoint)
+label_map: {7: 0, 8: 1, 11: 2, 12: 3, 13: 4, 17: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10, 24: 11, 25: 12,
+            26: 13, 27: 14, 28: 15, 31: 16, 32: 17, 33: 18}   # labelIds -> 19 trainIds, rest ignore
+splits:
+  train:
+    images: leftImg8bit/train/*/*_leftImg8bit.png
+    image_base: leftImg8bit/train
+    strip_suffix: _leftImg8bit
+    masks: gtFine/train/{parent}/{stem}_gtFine_labelIds.png
+  test:
+    images: leftImg8bit/val/*/*_leftImg8bit.png
+    image_base: leftImg8bit/val
+    strip_suffix: _leftImg8bit
+    masks: gtFine/val/{parent}/{stem}_gtFine_labelIds.png
+holdout: {source: train, target: val, ratio: 0.1, by_group: true}
