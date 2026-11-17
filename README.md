@@ -144,6 +144,31 @@ Every epoch, both for the teachers and for each distillation stage, prints:
 | `last.pt`, `student_stage_XX.pt` | Resumable state (student, old student, banks, buffer) |
 | `resolved_config.yaml`, `manifests/` | Exact settings and split membership |
 
+## Research figures
+
+After a run, `scripts/visualize.py` redraws every training curve from the run's records and
+reloads each saved checkpoint (the student after every stage, and every teacher) to run it on
+the test split of each domain:
+
+```bash
+python scripts/visualize.py --run runs/driving_dil/goated_full                  # everything
+python scripts/visualize.py --run runs/driving_dil/goated_full --no-inference   # curves only, no GPU
+python scripts/visualize.py --run runs/driving_dil/goated_full --max-images 300 --tsne-models final
+```
+
+Run it from the repo root with the data paths the run used. It writes PNG and PDF files to
+`<run>/figures/` and tables (CSV, Markdown, LaTeX) to `<run>/figures/tables/`:
+
+| Prefix | Figures |
+|---|---|
+| `A` | Teacher train/val loss, train/val accuracy, val mIoU and bIoU per epoch |
+| `B` | Student train/val loss, train/val accuracy and teacher agreement, val mIoU/mF1/bIoU, val mIoU per seen domain, forgetting/BWT, loss terms, learning rate, per-class val IoU heatmap |
+| `C` | Test mIoU matrix with teacher rows, forgetting curve, final student against teacher, forgetting and BWT per domain |
+| `D` | Confusion matrices (teacher and final student), per-class test IoU across stages, class-level forgetting, per-class student against teacher |
+| `E` | Reliability diagrams with ECE, entropy of correct and wrong pixels, prediction agreement between models |
+| `F` | t-SNE of pixel features by class and by domain for every model, across stages, and of image-level features by domain; silhouette scores in `tables/feature_silhouette.csv` |
+| `G` | Image, ground truth, teacher, student after each stage, error map and entropy map |
+
 ## Status
 
 The implementation is complete and tested end to end on synthetic data (see the
