@@ -16,7 +16,7 @@ from ..components.prototypes import BNStatRecorder, DomainPrototypeBank, Teacher
 from ..components.memory import ExemplarBuffer, ClassGaussianBank, StochasticRestore, vog_scores, entropy_scores
 from .common import (Meter, amp_ctx, build_optimizer, build_scheduler, combine_metrics, evaluate,
                      format_epoch, write_json)
-from .teachers import load_teacher
+from .access import TeacherAccessGuard
 from .reports import write_reports
 
 
@@ -42,6 +42,7 @@ class GoatedDistiller:
                                      store_labels=c["supervised_ce"]) if c["exemplar_buffer"] else None
         self.cbank = ClassGaussianBank(self.C, **h["class_proto"]["bank"]) if c["class_prototype_replay"] else None
         self.R, self.history, self.start_stage = [], [], 0
+        self.guard = TeacherAccessGuard(cfg, self.stages, self.out)
         total, trainable = count_params(self.student)
         write_json(self.out / "model_components.json", {
             "components": c, "student_params": total, "student_trainable": trainable,
@@ -109,7 +110,13 @@ class GoatedDistiller:
               f"| distill_on={stage['distill_on']} | external={stage['external']} ===")
         need_teacher = c["teacher_kd"] or c["aug_pseudo_label"] or c["teacher_echo"] or c["class_prototype_replay"] \
             or (c["exemplar_buffer"] and h["buffer"]["priority"] in ("vog", "entropy")) or c["auto_domain_routing"]
-        teacher = load_teacher(cfg, stage["teacher"], dev) if need_teacher else None
+        # Only T_t, only now: the guard refuses any other teacher and verifies release afterwards.
+        if need_teacher:
+            teacher = self.guard.load(si, stage, dev)
+        else:
+            teacher = None
+            self.guard.begin_without_teacher(si, stage)
+        self.guard.note_labels(c["supervised_ce"])
         rows = [r for d in stage["distill_on"] for r in self.splits[d]["train"]]
         loader = make_loader(cfg, rows, "distill", shuffle=True, drop_last=True)
         params = [p for p in self.student.parameters() if p.requires_grad]
@@ -122,6 +129,8 @@ class GoatedDistiller:
         stage_dom_ids = {self.didx[d] for d in stage["distill_on"]}
         router = self._calibrate_router(teacher, stage, loader) if (c["auto_domain_routing"] and c["old_student_kd"]
                                                                       and old_on) else None
+        if router is not None:
+            self.guard.note_router(router.calibrated_on)
         k_layers = h["prototypes"]["layers"]
         s_rec = BNStatRecorder(self.student, k_layers) if self.bank else None
         o_rec = BNStatRecorder(self.old, k_layers) if (self.bank and c["bn_layer_distill"] and old_on) else None
@@ -136,7 +145,8 @@ class GoatedDistiller:
             last_epoch = ep + 1 == stage["epochs"]
             for b in loader:
                 x = b["image"].to(dev, non_blocking=True)
-                y = b["mask"].to(dev, non_blocking=True)
+                y_gt = b["mask"].to(dev, non_blocking=True)  # measurement only (train acc)
+                y = y_gt if c["supervised_ce"] else None       # the only label tensor a loss may see
                 dom = torch.as_tensor(b["domain"], device=dev)
                 B = x.shape[0]
                 rep = None
@@ -203,6 +213,7 @@ class GoatedDistiller:
                     s_rep = s_logits[B:]
                     rsrc = []
                     if c["teacher_echo"] and "echo" in rep:
+                        self.guard.note_echo(sorted(set(rep["stages"])))
                         rsrc.append((rep["echo"], W["echo"]))
                     if old_on and c["old_student_kd"]:
                         rsrc.append((o_p1[B:], W["old_student_kd"]))
@@ -286,7 +297,7 @@ class GoatedDistiller:
                 for k, v in losses.items():
                     agg[k] = agg.get(k, 0.0) + float(v)
                 agg["total"] = agg.get("total", 0.0) + float(loss)
-                meter.update(loss, s_cur.detach(), y if (y != self.ign).any() else None, t_p1)
+                meter.update(loss, s_cur.detach(), y_gt if (y_gt != self.ign).any() else None, t_p1)
                 step += 1
             n = max(len(loader), 1)
             last = ep + 1 == stage["epochs"]
@@ -315,7 +326,7 @@ class GoatedDistiller:
                 "prototype_bank": self.bank.summary() if self.bank else None,
                 "buffer": self.buffer.summary() if self.buffer else None}
         print(f"[stage {stage['name']}] diagnostics: {diag}")
-        del teacher
+        del teacher, router
         if dev.type == "cuda":
             torch.cuda.empty_cache()
         return diag
@@ -384,6 +395,7 @@ class GoatedDistiller:
         for si in range(self.start_stage, len(self.stages)):
             stage = self.stages[si]
             diags.append(self.run_stage(si, stage))
+            self.guard.release()  # raises if T_t is still reachable after its stage
             self.old = deepcopy(self.student)
             self._freeze(self.old)
             row = {d: evaluate(self.student, ld, self.cfg, self.device) for d, ld in self.eval_loaders.items()}
@@ -394,6 +406,7 @@ class GoatedDistiller:
             torch.save(self.student.state_dict(), self.out / f"student_stage_{si + 1:02d}.pt")
             self.save(si)
         write_json(self.out / "diagnostics.json", diags)
+        print(f"[teacher access audit] {self.guard.write()}")
         if self.per_class_rows:
             import csv
             with (self.out / "per_class_val_history.csv").open("w", newline="") as f:

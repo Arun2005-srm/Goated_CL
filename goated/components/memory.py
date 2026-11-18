@@ -75,11 +75,13 @@ class ExemplarBuffer:
         keys = [k for k, b in self.buckets.items() if b and k not in exclude]
         if not keys:
             return None
-        picks = [random.choice(self.buckets[random.choice(keys)]) for _ in range(n)]
+        src = [random.choice(keys) for _ in range(n)]
+        picks = [random.choice(self.buckets[k]) for k in src]
         imgs = torch.stack([F.interpolate(e["image"].float()[None], size=size, mode="bilinear",
                                           align_corners=False)[0] if e["image"].shape[-2:] != tuple(size)
                             else e["image"].float() for e in picks]).to(device)
-        out = {"image": imgs, "domain": torch.tensor([e["domain"] for e in picks], device=device)}
+        out = {"image": imgs, "domain": torch.tensor([e["domain"] for e in picks], device=device),
+               "stages": src}  # which stage buckets (and so which past teachers' echoes) were replayed
         if all(e["echo"] is not None for e in picks):
             ps = [self._expand(*e["echo"]) for e in picks]
             hw = ps[0].shape[-2:]

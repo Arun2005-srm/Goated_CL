@@ -67,10 +67,15 @@ teachers:
   grad_clip: 5.0
   eval_every: 1
   class_weights: null
+  loss: ce               # ce | ohem (hard-pixel CE, helps rare/thin classes)
+  label_smoothing: 0.0   # >0 gives softer, better-calibrated teacher outputs for KD
+  ohem_thresh: 0.7
+  ohem_min_kept: 0.1     # fraction of valid pixels always kept by OHEM
 
 protocol:
   stages: []             # empty = auto from domain_order; else [{name, teacher, distill_on, external, epochs}]
   eval_on: null          # null = every domain
+  strict_teacher_access: false   # true = no stored past-teacher outputs (forbids teacher_echo); see teacher_access_audit.json
 
 distill:
   epochs: 10

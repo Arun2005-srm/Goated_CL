@@ -30,6 +30,25 @@ def load_teacher(cfg, name, device):
     return model
 
 
+def seg_loss(logits, y, ign, weight=None, kind="ce", label_smoothing=0.0, ohem_thresh=0.7, ohem_min_kept=0.1):
+    """Pixel CE, or OHEM CE: average only over hard pixels (p_true < ohem_thresh), keeping at
+    least `ohem_min_kept` (fraction) of the valid pixels. OHEM lifts rare / thin classes
+    (pole, light, sign, rider, bus, train, motorcycle, bicycle) that plain CE under-weights."""
+    if kind == "ce":
+        return F.cross_entropy(logits, y, weight=weight, ignore_index=ign, label_smoothing=label_smoothing)
+    pix = F.cross_entropy(logits, y, weight=weight, ignore_index=ign, reduction="none",
+                          label_smoothing=label_smoothing).flatten()
+    valid = (y != ign).flatten()
+    pix = pix[valid]
+    if pix.numel() == 0:
+        return logits.sum() * 0.0
+    k = max(1, int(ohem_min_kept * pix.numel()))
+    hard = pix > -torch.log(torch.tensor(ohem_thresh, device=pix.device))
+    if int(hard.sum()) < k:
+        return pix.topk(k).values.mean()
+    return pix[hard].mean()
+
+
 def _train_one(cfg, name, splits, device):
     tc = cfg["teachers"]
     doms = teacher_domains(cfg, name)
@@ -55,7 +74,8 @@ def _train_one(cfg, name, splits, device):
             with amp_ctx(tc.get("amp", True), device):
                 logits = model(x)
             logits = F.interpolate(logits.float(), size=y.shape[-2:], mode="bilinear", align_corners=False)
-            loss = F.cross_entropy(logits, y, weight=cw, ignore_index=ign)
+            loss = seg_loss(logits, y, ign, cw, tc.get("loss", "ce"), tc.get("label_smoothing", 0.0),
+                            tc.get("ohem_thresh", 0.7), tc.get("ohem_min_kept", 0.1))
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)

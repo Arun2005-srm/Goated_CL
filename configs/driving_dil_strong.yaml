@@ -1,0 +1,52 @@
+# Stronger teachers + longer, augmented distillation for Cityscapes -> BDD100K -> IDD.
+# Built from what the first driving_dil run showed (see runs/.../train.log):
+#   * Teachers (test mIoU 66.5 / 57.5 / 69.5) were weakest on rare/thin classes
+#     (bus 38 on CS, train/motorcycle/bicycle 16-19 on BDD, traffic light 23-41), and the BDD
+#     teacher's val loss rose from epoch ~8 while train loss kept falling (over-confident).
+#     -> batch 8 (BN statistics from 4 crops are noisy), scale aug 0.5-2.0, OHEM, label smoothing.
+#   * The student lost 12 mIoU points to its teacher already at stage 1 (54.2 vs 66.5), before any
+#     forgetting, and its val mIoU was still climbing at epoch 10.
+#     -> more distillation epochs (stage 1 longest), scale/crop aug for distillation,
+#        confident-pixel pseudo-label CE (aug_pseudo_label) on top of KD.
+# Eval resolution is unchanged (384x768), so numbers stay comparable to the first run.
+#
+#   python train.py --config configs/driving_dil_strong.yaml
+extends: driving_dil.yaml
+output_dir: runs/driving_dil_strong/goated_full
+
+teachers:
+  dir: runs/driving_dil_strong/teachers   # new teachers; the old ones are kept untouched
+  epochs: 60
+  batch_size: 8
+  lr: 0.01
+  warmup_steps: 500
+  loss: ohem
+  label_smoothing: 0.05
+
+transforms:
+  train:
+    - {name: resize, size: [512, 1024]}
+    - {name: random_scale, scale: [0.5, 2.0]}
+    - {name: random_crop, size: [384, 768]}
+    - {name: random_horizontal_flip, p: 0.5}
+    - {name: color_jitter, brightness: 0.3, contrast: 0.3, saturation: 0.3}
+    - {name: normalize}
+  distill:                 # still a fixed 384x768 output, so replay batches concatenate
+    - {name: resize, size: [512, 1024]}
+    - {name: random_scale, scale: [0.75, 1.5]}
+    - {name: random_crop, size: [384, 768]}
+    - {name: random_horizontal_flip, p: 0.5}
+    - {name: normalize}
+
+protocol:
+  strict_teacher_access: false   # set true (with components.teacher_echo=false) for the strict protocol
+  stages:
+    - {name: cityscapes, teacher: cityscapes, distill_on: [cityscapes], epochs: 30}
+    - {name: bdd100k,    teacher: bdd100k,    distill_on: [bdd100k],    epochs: 15}
+    - {name: idd,        teacher: idd,        distill_on: [idd],        epochs: 15}
+
+components:
+  aug_pseudo_label: true
+
+hparams:
+  aug_pseudo: {threshold: 0.8}

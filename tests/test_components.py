@@ -21,7 +21,7 @@ def cfg(*sets):
 
 
 def test_all_configs_validate():
-    for name in ("smoke.yaml", "driving_dil.yaml", "driving_cd.yaml"):
+    for name in ("smoke.yaml", "driving_dil.yaml", "driving_cd.yaml", "driving_dil_strong.yaml"):
         validate(load_config(ROOT / "configs" / name))
 
 
@@ -34,6 +34,8 @@ def test_cd_protocol_derives_external():
     ["components.exemplar_buffer=false"],                                   # echo needs buffer
     ["components.teacher_kd=false"],                                        # no current signal
     ["components.bn_domain_prototypes=false", "components.bn_layer_distill=false"],  # stats-aware unused
+    ["protocol.strict_teacher_access=true"],                                # strict forbids echoes
+    ["teachers.loss=focal"],
 ])
 def test_invalid_combinations_rejected(sets):
     with pytest.raises(ValueError):
@@ -122,3 +124,65 @@ def test_miou_known_values():
     gt = torch.tensor([0, 1, 1, 255])
     m = metrics_from_confusion(confusion(pred, gt, 2, 255), ["a", "b"])
     assert abs(m["miou"] - 50.0) < 1e-6  # IoU(a)=1/2, IoU(b)=1/2
+
+
+# ---------------------------------------------------------------------- teacher access guard
+def _guard_cfg(tmp_path, *sets):
+    from goated.models.segmenter import Segmenter
+    c = validate(cfg(f"output_dir={tmp_path.as_posix()}", f"teachers.dir={(tmp_path / 't').as_posix()}", *sets))
+    (tmp_path / "t").mkdir()
+    for d in c["domain_order"]:
+        m = Segmenter(c["models"]["teacher"], len(c["classes"]))
+        torch.save({"model": m.state_dict(), "model_spec": c["models"]["teacher"]}, tmp_path / "t" / f"{d}.pt")
+    return c
+
+
+def test_guard_refuses_other_stage_teacher(tmp_path):
+    from goated.engine.access import TeacherAccessGuard, TeacherAccessError
+    c = _guard_cfg(tmp_path)
+    st = build_stages(c)
+    g = TeacherAccessGuard(c, st, tmp_path)
+    with pytest.raises(TeacherAccessError):
+        g.load(1, st[0], torch.device("cpu"))          # stage 2 asking for stage-1 teacher
+
+
+def test_guard_detects_teacher_kept_alive(tmp_path):
+    from goated.engine.access import TeacherAccessGuard, TeacherAccessError
+    c = _guard_cfg(tmp_path)
+    st = build_stages(c)
+    g = TeacherAccessGuard(c, st, tmp_path)
+    t = g.load(0, st[0], torch.device("cpu"))
+    assert all(not p.requires_grad for p in t.parameters())
+    with pytest.raises(TeacherAccessError):
+        g.release()                                     # `t` still referenced here
+    del t
+    g2 = TeacherAccessGuard(c, st, tmp_path)
+    t = g2.load(0, st[0], torch.device("cpu"))
+    del t
+    g2.release()
+    t = g2.load(1, st[1], torch.device("cpu"))         # next stage loads fine after release
+    del t
+    g2.release()
+    summ = g2.write()
+    assert summ["only_current_teacher_each_stage"] and summ["all_teachers_released"]
+    assert not summ["gt_labels_used_in_any_loss"]
+
+
+def test_guard_strict_rejects_echo(tmp_path):
+    from goated.engine.access import TeacherAccessGuard, TeacherAccessError
+    c = _guard_cfg(tmp_path, "components.teacher_echo=false", "protocol.strict_teacher_access=true")
+    g = TeacherAccessGuard(c, build_stages(c), tmp_path)
+    g.begin_without_teacher(1, build_stages(c)[1])
+    with pytest.raises(TeacherAccessError):
+        g.note_echo(["sunny"])
+
+
+def test_ohem_focuses_on_hard_pixels():
+    from goated.engine.teachers import seg_loss
+    y = torch.zeros(1, 4, 4, dtype=torch.long)
+    logits = torch.zeros(1, 2, 4, 4)
+    logits[:, 0] = 10.0                                 # all easy ...
+    logits[0, 0, 0, 0], logits[0, 1, 0, 0] = 0.0, 10.0  # ... except one hard pixel
+    ce = seg_loss(logits, y, 255, kind="ce")
+    oh = seg_loss(logits, y, 255, kind="ohem", ohem_min_kept=0.0)
+    assert oh > 5 * ce

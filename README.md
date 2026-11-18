@@ -42,6 +42,13 @@ python scripts/run_ablations.py --config configs/driving_dil.yaml # baselines + 
 Use `--only validate|eda|teachers` to stop early and `--resume runs/.../last.pt` to
 continue a run.
 
+**Every run gets its own folder**: `<output_dir>/<YYYYmmdd-HHMMSS>[_<name>]`, e.g.
+`runs/driving_dil_strong/goated_full/20261118-140512_strict`. Add `--name <tag>` to label it.
+`--resume <run>/last.pt` continues inside that run's folder. Teachers are *not* per run: they
+live in `teachers.dir` (one folder per config) and are reused, so they train only once.
+`scripts/run_ablations.py` writes each sweep to `<parent>/ablations_<timestamp>/<preset>/`
+(`--into <folder>` resumes a sweep).
+
 ## Datasets
 
 | Config | Layout expected under `root` | Notes |
@@ -141,6 +148,7 @@ Every epoch, both for the teachers and for each distillation stage, prints:
 | `history.csv`, `per_class_val_history.csv` | Every per-epoch metric, plus per-class IoU/F1/bIoU per epoch |
 | `predictions_<domain>.png` | Image, ground truth and student prediction |
 | `diagnostics.json` | Router external score per domain, prototype observations and rejected outliers, buffer contents |
+| `teacher_access_audit.json` | Per stage: which teacher was loaded (only T_t is allowed), whether it was freed after the stage, whether GT labels reached any loss, and how many replay batches used stored echoes of past teachers. `protocol.strict_teacher_access: true` (with `teacher_echo: false`) forbids past-teacher outputs entirely |
 | `last.pt`, `student_stage_XX.pt` | Resumable state (student, old student, banks, buffer) |
 | `resolved_config.yaml`, `manifests/` | Exact settings and split membership |
 

@@ -9,6 +9,7 @@ Teachers are shared (teachers.dir), so they are trained once and reused by every
 import argparse
 import json
 import subprocess
+from datetime import datetime
 import sys
 from pathlib import Path
 
@@ -60,9 +61,12 @@ def main():
     p.add_argument("--config", required=True)
     p.add_argument("--only", nargs="*")
     p.add_argument("--set", action="append", default=[])
+    p.add_argument("--into", help="existing sweep folder to resume (skips presets that already have results)")
     a = p.parse_args()
     base = load_config(a.config, a.set)
-    root = Path(base["output_dir"]).parent
+    # Each ablation sweep gets its own folder; pass --into <folder> to resume/extend a sweep.
+    root = Path(a.into) if a.into else         Path(base["output_dir"]).parent / f"ablations_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    print(f"[ablations] output folder: {root.as_posix()}")
     names = a.only or list(PRESETS)
     for n in names:
         out_dir = root / n
@@ -70,7 +74,7 @@ def main():
             print(f"[skip] {n}: results exist")
             continue
         cmd = [sys.executable, str(ROOT / "train.py"), "--config", a.config, *sum([["--set", s] for s in a.set], []),
-               "--set", f"output_dir={out_dir.as_posix()}", *sum([["--set", s] for s in overrides(PRESETS[n])], [])]
+               "--set", f"output_dir={out_dir.as_posix()}", "--exact-output-dir", *sum([["--set", s] for s in overrides(PRESETS[n])], [])]
         print(f"\n######## {n} ########\n" + " ".join(cmd))
         r = subprocess.run(cmd, cwd=ROOT)
         if r.returncode:

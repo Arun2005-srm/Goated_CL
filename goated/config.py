@@ -94,6 +94,10 @@ def validate(cfg):
     if comps["exemplar_buffer"] and not (comps["teacher_echo"] or comps["old_student_kd"] or comps["supervised_ce"]
                                          or comps["bn_domain_prototypes"]):
         raise ValueError("exemplar_buffer is unused: replayed images need echo, old-student KD, CE or BN prototypes")
+    if cfg["teachers"].get("loss", "ce") not in ("ce", "ohem"):
+        raise ValueError("teachers.loss must be ce or ohem")
+    if cfg["protocol"].get("strict_teacher_access") and comps["teacher_echo"]:
+        raise ValueError("protocol.strict_teacher_access forbids teacher_echo (stored outputs of past teachers)")
     if cfg["hparams"]["old_student_on"] not in ("external", "all"):
         raise ValueError("hparams.old_student_on must be 'external' or 'all'")
     if cfg["hparams"]["buffer"]["priority"] not in ("vog", "entropy", "random"):
