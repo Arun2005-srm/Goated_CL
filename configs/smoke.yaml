@@ -3,6 +3,7 @@
 #   python train.py --config configs/smoke.yaml
 extends: base.yaml
 output_dir: runs/smoke/goated_full
+gpu: {min_free_gb: 0}    # tiny models: any GPU (or the CPU) is enough
 classes: [road, building, sky, car]
 colors: [[128,64,128], [70,70,70], [70,130,180], [0,0,142]]
 

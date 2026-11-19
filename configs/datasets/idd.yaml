@@ -1,4 +1,6 @@
 # India Driving Dataset (IDD Segmentation, IDD_Segmentation.tar.gz). Expected layout under root:
+#   masks/{train,val}/<seq>/<frame>.png        (level3Id label PNGs; layout used on the A100 server)
+#   For the official layout instead, set masks: gtFine/<split>/{parent}/{stem}_gtFine_labellevel3Ids.png
 #   leftImg8bit/{train,val}/<seq>/<frame>_leftImg8bit.png
 #   gtFine/{train,val}/<seq>/<frame>_gtFine_labellevel3Ids.png
 # The *_labellevel3Ids.png masks are produced by the official public-code script
@@ -24,10 +26,10 @@ splits:
     images: leftImg8bit/train/*/*_leftImg8bit.png
     image_base: leftImg8bit/train
     strip_suffix: _leftImg8bit
-    masks: gtFine/train/{parent}/{stem}_gtFine_labellevel3Ids.png
+    masks: masks/train/{parent}/{stem}.png
   test:
     images: leftImg8bit/val/*/*_leftImg8bit.png
     image_base: leftImg8bit/val
     strip_suffix: _leftImg8bit
-    masks: gtFine/val/{parent}/{stem}_gtFine_labellevel3Ids.png
+    masks: masks/val/{parent}/{stem}.png
 holdout: {source: train, target: val, ratio: 0.1, by_group: true}

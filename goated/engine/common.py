@@ -15,7 +15,11 @@ def seed_all(seed):
 
 
 def get_device(cfg):
+    from ..gpu import pin_single_gpu
+    pin_single_gpu(cfg)  # one GPU only (no-op if train.py already pinned it)
     d = cfg.get("device", "auto")
+    if d != "cpu" and torch.cuda.is_available() and torch.cuda.device_count() != 1:
+        raise RuntimeError(f"Expected exactly one visible GPU, found {torch.cuda.device_count()}")
     return torch.device("cuda" if torch.cuda.is_available() else "cpu") if d == "auto" else torch.device(d)
 
 

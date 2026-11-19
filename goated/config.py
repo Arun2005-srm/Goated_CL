@@ -94,6 +94,9 @@ def validate(cfg):
     if comps["exemplar_buffer"] and not (comps["teacher_echo"] or comps["old_student_kd"] or comps["supervised_ce"]
                                          or comps["bn_domain_prototypes"]):
         raise ValueError("exemplar_buffer is unused: replayed images need echo, old-student KD, CE or BN prototypes")
+    gid = (cfg.get("gpu") or {}).get("id", "auto")
+    if gid != "auto" and not (isinstance(gid, int) and gid >= 0):
+        raise ValueError("gpu.id must be 'auto' or a non-negative GPU index")
     if cfg["teachers"].get("loss", "ce") not in ("ce", "ohem"):
         raise ValueError("teachers.loss must be ce or ohem")
     if cfg["protocol"].get("strict_teacher_access") and comps["teacher_echo"]:

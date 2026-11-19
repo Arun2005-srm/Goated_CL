@@ -186,3 +186,46 @@ def test_ohem_focuses_on_hard_pixels():
     ce = seg_loss(logits, y, 255, kind="ce")
     oh = seg_loss(logits, y, 255, kind="ohem", ohem_min_kept=0.0)
     assert oh > 5 * ce
+
+
+# ---------------------------------------------------------------------- one GPU per run
+SMI = [  # the shared 8-GPU server: GPUs 2 and 7 idle
+    {"index": 0, "used": 32488, "total": 40960, "util": 100}, {"index": 1, "used": 25653, "total": 40960, "util": 100},
+    {"index": 2, "used": 721, "total": 40960, "util": 0}, {"index": 3, "used": 36799, "total": 40960, "util": 100},
+    {"index": 7, "used": 4, "total": 40960, "util": 0}]
+
+
+@pytest.fixture
+def gpu_env(monkeypatch):
+    import goated.gpu as g
+    monkeypatch.setattr(g, "_DONE", {})
+    monkeypatch.setattr(g, "_query", lambda: SMI)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    return g
+
+
+def test_gpu_auto_picks_single_least_used(gpu_env):
+    import os
+    gpu_env.pin_single_gpu({"gpu": {"id": "auto", "min_free_gb": 16}})
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "7"
+
+
+def test_gpu_fixed_id_and_env_limited_to_one(gpu_env, monkeypatch):
+    import os
+    gpu_env.pin_single_gpu({"gpu": {"id": 2}})
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "2"
+    monkeypatch.setattr(gpu_env, "_DONE", {})
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,4,5")
+    gpu_env.pin_single_gpu({"gpu": {"id": "auto"}})
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "3"
+
+
+def test_gpu_refuses_when_all_busy(gpu_env, monkeypatch):
+    monkeypatch.setattr(gpu_env, "_query", lambda: [r for r in SMI if r["util"] == 100])
+    with pytest.raises(RuntimeError):
+        gpu_env.pin_single_gpu({"gpu": {"id": "auto", "min_free_gb": 16}})
+
+
+def test_gpu_id_validated():
+    with pytest.raises(ValueError):
+        validate(cfg("gpu.id=-1"))

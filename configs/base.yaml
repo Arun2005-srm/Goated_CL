@@ -1,6 +1,9 @@
 # Defaults for every experiment. Dataset/protocol configs `extends:` this file.
 seed: 42
 device: auto            # auto | cuda | cpu
+gpu:                    # shared server: every run uses exactly ONE GPU
+  id: auto              # auto = least-used GPU (nvidia-smi) | an index, e.g. 2
+  min_free_gb: 16       # auto only: do not start if the freest GPU has less free memory
 output_dir: runs/experiment
 
 # Unified label space shared by all domains (Cityscapes-19 by default).

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from goated.config import load_config, validate
-from goated.pipeline import run
+from goated.gpu import pin_single_gpu
 
 
 def run_dir(base, a):
@@ -38,6 +38,8 @@ def main():
                    help="write directly into output_dir (no timestamped sub-folder); used by run_ablations.py")
     a = p.parse_args()
     cfg = validate(load_config(a.config, a.set))
+    pin_single_gpu(cfg)  # before torch touches CUDA: this process sees exactly one GPU
+    from goated.pipeline import run
     cfg["output_dir"] = run_dir(cfg["output_dir"], a)
     print(f"[run] output folder: {cfg['output_dir']}")
     run(cfg, only=None if a.only == "distill" else a.only, resume=a.resume)
